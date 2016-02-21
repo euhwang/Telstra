@@ -393,6 +393,30 @@ DATA NEW_TRAIN;
 	END;
 RUN;
 
+*Limiting the zero fault severity to half the sample;
+PROC SQL NOPRINT;
+	CREATE TABLE OVER_SAMPLE_ZERO AS
+	SELECT *
+	FROM NEW_TRAIN
+	WHERE FAULT_SEVERITY = 0;
+QUIT;
+
+PROC SURVEYSELECT DATA = OVER_SAMPLE_ZERO
+	METHOD = SRS N = 2392 OUT = NEW_OVER_SAMPLE_ZERO;
+RUN;
+
+PROC SQL NOPRINT;
+	CREATE TABLE NEW_TRAIN_SAMPLE AS
+	SELECT *
+	FROM NEW_TRAIN
+	WHERE FAULT_SEVERITY = 1 OR FAULT_SEVERITY = 2
+	UNION
+	SELECT *
+	FROM NEW_OVER_SAMPLE_ZERO;
+QUIT;
+
+
+
 /*save files as sas datasets*/
 proc sql;
 create table save.new_train as select * from new_train;
@@ -410,6 +434,13 @@ RUN;
 PROC EXPORT
 	DATA = NEW_TRAIN
 	OUTFILE = "&file_locn.new_train.csv"
+	DBMS = CSV
+	REPLACE;
+RUN;
+
+PROC EXPORT
+	DATA = NEW_TRAIN_SAMPLE
+	OUTFILE = "&file_locn.new_train_sample.csv"
 	DBMS = CSV
 	REPLACE;
 RUN;
