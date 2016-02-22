@@ -15,7 +15,7 @@
 %let test = test.csv;
 %let train = train.csv;
 
-*libname save '\\vmware-host\Shared Folders\Documents\GWU\DNSC 6279\Telstra\';
+libname save '\\vmware-host\Shared Folders\Documents\GWU\DNSC 6279\Telstra\';
 
 
 ** Importing tables;
@@ -420,6 +420,7 @@ QUIT;
 /*save files as sas datasets*/
 proc sql;
 create table save.new_train as select * from new_train;
+create table save.new_train_sample as select * from new_train_sample;
 create table save.new_test as select * from new_test;
 quit;
 
