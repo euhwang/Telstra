@@ -218,7 +218,6 @@ quit;
 
 %missing(location);
 
-
 proc sql;
 create table define_evnt_rt_vars as select
 log_feature
@@ -229,37 +228,71 @@ log_feature
 		end as fault_sev_0
 ,volume*calculated fault_sev_0 as wgtd_fault_sev_0
 ,case 
+	when calculated wgtd_fault_sev_0 = 0 then 1
+	else calculated wgtd_fault_sev_0
+		end as den_wgtd_fault_sev_0
+,case 
 	when fault_severity = 1 then 1
 	else 0
 		end as fault_sev_1
 ,volume*calculated fault_sev_1 as wgtd_fault_sev_1
 ,case 
+	when calculated wgtd_fault_sev_1 = 0 then 1
+	else calculated wgtd_fault_sev_1
+		end as den_wgtd_fault_sev_1
+,case 
 	when fault_severity = 2 then 1
 	else 0
 		end as fault_sev_2
 ,volume*calculated fault_sev_2 as wgtd_fault_sev_2
+,case 
+	when calculated wgtd_fault_sev_2 = 0 then 1
+	else calculated wgtd_fault_sev_2
+		end as den_wgtd_fault_sev_2
 from joined_train
+order by log_feature
 ;
 
 create table event_rate_table as select
 log_feature
-/*not sure if we want to make some sort of overall distribution to incorporate volume*/
-,sum(wgtd_fault_sev_0)as lf_evnt_vol_0
-,sum(wgtd_fault_sev_1)as lf_evnt_vol_1
-,sum(wgtd_fault_sev_2)as lf_evnt_vol_2
-/*take mean of 1s for each event rate severity - will calculate rate*/
+/*uses volume to calculate event rate (these are probably ideal to use)*/
+,sum(wgtd_fault_sev_0)/sum(den_wgtd_fault_sev_0) + (rand('NORMAL',0,1)*.000001) as lf_wgtd_evnt_rt_0
+,sum(wgtd_fault_sev_1)/sum(den_wgtd_fault_sev_1) + (rand('NORMAL',0,1)*.000001) as lf_wgtd_evnt_rt_1
+,sum(wgtd_fault_sev_2)/sum(den_wgtd_fault_sev_2) + (rand('NORMAL',0,1)*.000001) as lf_wgtd_evnt_rt_2
+
+/*take mean of 1s for each event rate severity - will calculate rate not taking into consideration volume*/
+,mean(fault_sev_0) + (rand('NORMAL',0,1)*.000001) as lf_evnt_rt_0
+,mean(fault_sev_1) + (rand('NORMAL',0,1)*.000001) as lf_evnt_rt_1
+,mean(fault_sev_2) + (rand('NORMAL',0,1)*.000001) as lf_evnt_rt_2
+from define_evnt_rt_vars
+group by 1;
+
+/*checker*/
+create table event_rate_table_no_rand as select
+log_feature
+/*uses volume to calculate event rate (these are probably ideal to use)*/
+,sum(wgtd_fault_sev_0)/sum(den_wgtd_fault_sev_0) as lf_wgtd_evnt_rt_0
+,sum(wgtd_fault_sev_1)/sum(den_wgtd_fault_sev_1) as lf_wgtd_evnt_rt_1
+,sum(wgtd_fault_sev_2)/sum(den_wgtd_fault_sev_2) as lf_wgtd_evnt_rt_2
+
+/*take mean of 1s for each event rate severity - will calculate rate not taking into consideration volume*/
 ,mean(fault_sev_0) as lf_evnt_rt_0
 ,mean(fault_sev_1) as lf_evnt_rt_1
 ,mean(fault_sev_2) as lf_evnt_rt_2
 from define_evnt_rt_vars
 group by 1;
+quit;
 
 /*attaches event rates to original so that we can add it to our transpose*/
+
+proc sql;
 create table log_feature_event_rate as select
 a.*
-,b.lf_evnt_rt_0
-,b.lf_evnt_rt_1
-,b.lf_evnt_rt_2
+/*used wgtd evnt rt, but we can change this*/
+,b.lf_wgtd_evnt_rt_0
+,b.lf_wgtd_evnt_rt_1
+,b.lf_wgtd_evnt_rt_2
+/*join to orig log table because we are redefining input as rate*/
 from log a
 left join event_rate_table b
 on a.log_feature = b.log_feature;
