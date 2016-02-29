@@ -202,8 +202,9 @@ order by &var.
 ;
 quit;
 %mend;
-%quick_distinct(location,train);
-%quick_distinct(location,test);
+/*%quick_distinct(location,train);*/
+/*%quick_distinct(location,test);*/
+
 %macro missing(var);
 proc sql;
 create table missing_levels_&var. as select
@@ -216,7 +217,7 @@ where b.&var. is not null;
 quit;
 %mend;
 
-%missing(location);
+/*%missing(location);*/
 
 proc sql;
 create table define_evnt_rt_vars as select
@@ -283,8 +284,8 @@ from define_evnt_rt_vars
 group by 1;
 quit;
 
-/*attaches event rates to original so that we can add it to our transpose*/
 
+/*attaches event rates to original so that we can add it to our transpose*/
 proc sql;
 create table log_feature_event_rate as select
 a.*
@@ -293,12 +294,43 @@ a.*
 ,b.lf_wgtd_evnt_rt_1
 ,b.lf_wgtd_evnt_rt_2
 /*join to orig log table because we are redefining input as rate*/
-from log a
+from temp_log a
 left join event_rate_table b
 on a.log_feature = b.log_feature;
 quit;
 
+%macro event_rate(var, abbr);
+proc sql;
+create table define_evnt_rt_vars as select
+&var.
+,case 
+	when fault_severity = 0 then 1
+	else 0
+		end as fault_sev_0
+,case 
+	when fault_severity = 1 then 1
+	else 0
+		end as fault_sev_1
+,case 
+	when fault_severity = 1 then 1
+	else 0
+		end as fault_sev_2
+from joined_train
+order by &var.
+;
+create table event_rate_table_&abbr. as select
+&var.
+/*take mean of 1s for each event rate severity - will calculate rate not taking into consideration volume*/
+,mean(fault_sev_0) + (rand('NORMAL',0,1)*.000001) as &abbr._evnt_rt_0
+,mean(fault_sev_1) + (rand('NORMAL',0,1)*.000001) as &abbr._evnt_rt_1
+,mean(fault_sev_2) + (rand('NORMAL',0,1)*.000001) as &abbr._evnt_rt_2
+from define_evnt_rt_vars
+group by 1;
+quit;
+%mend;
+%event_rate(location, loc);
 
+/*Dropping volume column*/
 
 *Create temporary table becuase of substring;
 PROC SQL NOPRINT;
@@ -321,22 +353,46 @@ QUIT;
 
 PROC SQL NOPRINT;
 	CREATE TABLE TEMP_TEST AS
-	SELECT ID, SUBSTR(LOCATION,10,3) AS location
-	FROM TEST;
+	SELECT a.ID
+	,SUBSTR(a.LOCATION,10,3) AS location
+	,b.loc_evnt_rt_0
+	,b.loc_evnt_rt_1
+	,b.loc_evnt_rt_2
+	FROM TEST a
+	left join event_rate_table_loc b
+	on SUBSTR(a.LOCATION,10,3) = b.location
+ORDER BY A.ID;
 QUIT;
 
 PROC SQL NOPRINT;
 	CREATE TABLE TEMP_TRAIN AS
-	SELECT ID, SUBSTR(LOCATION,10,3) AS LOCATION, FAULT_SEVERITY
-	FROM TRAIN;
+	SELECT a.ID 
+	,SUBSTR(a.LOCATION,10,3) AS LOCATION 
+	,b.loc_evnt_rt_0
+	,b.loc_evnt_rt_1
+	,b.loc_evnt_rt_2
+	,a.FAULT_SEVERITY
+	FROM TRAIN a
+left join event_rate_table_loc b
+on SUBSTR(a.LOCATION,10,3)=b.location
+ORDER BY A.ID;
 QUIT;
 
-/*Dropping volume column*/
-PROC SQL NOPRINT;
+PROC SQL;
 	CREATE TABLE TEMP_LOG AS
-	SELECT ID, SUBSTR(LOG_FEATURE,9,3) AS LOG_FEATURE
-	FROM LOG;
-QUIT;
+	SELECT 
+	a.ID, 
+	SUBSTR(a.LOG_FEATURE,9,3) AS LOG_FEATURE
+	,b.lf_wgtd_evnt_rt_0
+	,b.lf_wgtd_evnt_rt_1
+	,b.lf_wgtd_evnt_rt_2
+/*join to orig log table because we are redefining input as rate*/
+from log a
+left join event_rate_table b
+on SUBSTR(a.LOG_FEATURE,9,3) = b.log_feature
+ORDER BY A.ID;
+quit;
+
 
 *Data transposing;
 PROC TRANSPOSE DATA=TEMP_RESOURCE OUT=NEW_RESOURCE (DROP=_:) PREFIX=resource_type_;
@@ -354,40 +410,62 @@ PROC TRANSPOSE DATA=TEMP_SEVERITY OUT=NEW_SEVERITY (DROP=_:) PREFIX=severity_typ
 	VAR SEVERITY_TYPE ;
 RUN;
 
-PROC TRANSPOSE DATA=TEMP_LOG OUT=NEW_LOG (DROP=_:) PREFIX=log_feature_;
+/*proc sort data=log_feature_event_rate;*/
+/*by ID ;*/
+/*run;*/
+
+PROC TRANSPOSE DATA=TEMP_LOG OUT=NEW_LOG_0 (DROP=_:) PREFIX=log_0_feature_;
 	BY ID;
-	VAR LOG_FEATURE;
+	VAR lf_wgtd_evnt_rt_0;
+RUN;
+PROC TRANSPOSE DATA=TEMP_LOG OUT=NEW_LOG_1 (DROP=_:) PREFIX=log_1_feature_;
+	BY ID;
+	VAR lf_wgtd_evnt_rt_1;
+RUN;
+PROC TRANSPOSE DATA=TEMP_LOG OUT=NEW_LOG_2 (DROP=_:) PREFIX=log_2_feature_;
+	BY ID;
+	VAR lf_wgtd_evnt_rt_2;
 RUN;
 
 /*JOIN TOTAL SUM OF VOLUME FROM ORIG LOG DATASET FOR EACH ID TO TRANSPOSED LOG FEATURE*/
 PROC SQL;
 CREATE TABLE NEW_LOG2 AS SELECT 
-A.*
-,((CASE WHEN log_feature_1 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_2 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_3 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_4 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_5 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_6 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_7 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_8 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_9 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_10 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_11 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_12 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_13 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_14 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_15 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_16 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_17 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_18 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_19 IS NOT NULL THEN 1 ELSE 0 END)
-  + (CASE WHEN log_feature_20 IS NOT NULL THEN 1 ELSE 0 END)
-) AS DIFF_LOG_FEATURES
+A.ID
+,A.LOG_FEATURE
+,C.*
+,D.*
+,E.*
+/*,((CASE WHEN log_feature_1 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_2 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_3 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_4 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_5 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_6 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_7 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_8 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_9 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_10 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_11 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_12 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_13 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_14 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_15 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_16 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_17 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_18 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_19 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*  + (CASE WHEN log_feature_20 IS NOT NULL THEN 1 ELSE 0 END)*/
+/*) AS DIFF_LOG_FEATURES*/
 ,B.VOLUME AS TOTAL_VOL
-FROM NEW_LOG A
+FROM TEMP_LOG A
 LEFT JOIN (SELECT ID, SUM(VOLUME)AS VOLUME FROM LOG GROUP BY 1) B
-ON A.ID = B.ID;
+ON A.ID = B.ID
+LEFT JOIN NEW_LOG_1 C
+ON A.ID = C.ID
+LEFT JOIN NEW_LOG_2 D
+ON A.ID = D.ID
+LEFT JOIN NEW_LOG_0 E
+ON A.ID = E.ID;
 QUIT;
 
 
@@ -448,22 +526,24 @@ PROC SQL NOPRINT;
 	LEFT JOIN NEW_LOG2 E ON A.ID = E.ID;
 QUIT;
 
-*Changing everything blank to zero;
-DATA NEW_TEST;
-	SET NEW_TEST;
-	ARRAY ZERO LOCATION SEVERITY_TYPE RESOURCE_TYPE_1 RESOURCE_TYPE_2 RESOURCE_TYPE_3 RESOURCE_TYPE_4 RESOURCE_TYPE_5 EVENT_TYPE_1 EVENT_TYPE_2 EVENT_TYPE_3 EVENT_TYPE_4 EVENT_TYPE_5 EVENT_TYPE_6 EVENT_TYPE_7 EVENT_TYPE_8 EVENT_TYPE_9 EVENT_TYPE_10 EVENT_TYPE_11 LOG_FEATURE_1 LOG_FEATURE_2  LOG_FEATURE_3 LOG_FEATURE_4 LOG_FEATURE_5 LOG_FEATURE_6 LOG_FEATURE_7 LOG_FEATURE_8 LOG_FEATURE_9 LOG_FEATURE_10 LOG_FEATURE_11 LOG_FEATURE_12 LOG_FEATURE_13 LOG_FEATURE_14 LOG_FEATURE_15 LOG_FEATURE_16 LOG_FEATURE_17 LOG_FEATURE_18 LOG_FEATURE_19 LOG_FEATURE_20;
-	DO OVER ZERO;
-		IF ZERO=. THEN ZERO=0;
-	END;
-RUN;
+/*GOING TO HANDLE THIS IN MINER*/
 
-DATA NEW_TRAIN;
-	SET NEW_TRAIN;
-	ARRAY ZERO LOCATION SEVERITY_TYPE RESOURCE_TYPE_1 RESOURCE_TYPE_2 RESOURCE_TYPE_3 RESOURCE_TYPE_4 RESOURCE_TYPE_5 EVENT_TYPE_1 EVENT_TYPE_2 EVENT_TYPE_3 EVENT_TYPE_4 EVENT_TYPE_5 EVENT_TYPE_6 EVENT_TYPE_7 EVENT_TYPE_8 EVENT_TYPE_9 EVENT_TYPE_10 EVENT_TYPE_11 LOG_FEATURE_1 LOG_FEATURE_2  LOG_FEATURE_3 LOG_FEATURE_4 LOG_FEATURE_5 LOG_FEATURE_6 LOG_FEATURE_7 LOG_FEATURE_8 LOG_FEATURE_9 LOG_FEATURE_10 LOG_FEATURE_11 LOG_FEATURE_12 LOG_FEATURE_13 LOG_FEATURE_14 LOG_FEATURE_15 LOG_FEATURE_16 LOG_FEATURE_17 LOG_FEATURE_18 LOG_FEATURE_19 LOG_FEATURE_20;
-	DO OVER ZERO;
-		IF ZERO=. THEN ZERO=0;
-	END;
-RUN;
+*Changing everything blank to zero;
+/*DATA NEW_TEST;*/
+/*	SET NEW_TEST;*/
+/*	ARRAY ZERO LOCATION SEVERITY_TYPE RESOURCE_TYPE_1 RESOURCE_TYPE_2 RESOURCE_TYPE_3 RESOURCE_TYPE_4 RESOURCE_TYPE_5 EVENT_TYPE_1 EVENT_TYPE_2 EVENT_TYPE_3 EVENT_TYPE_4 EVENT_TYPE_5 EVENT_TYPE_6 EVENT_TYPE_7 EVENT_TYPE_8 EVENT_TYPE_9 EVENT_TYPE_10 EVENT_TYPE_11 LOG_FEATURE_1 LOG_FEATURE_2  LOG_FEATURE_3 LOG_FEATURE_4 LOG_FEATURE_5 LOG_FEATURE_6 LOG_FEATURE_7 LOG_FEATURE_8 LOG_FEATURE_9 LOG_FEATURE_10 LOG_FEATURE_11 LOG_FEATURE_12 LOG_FEATURE_13 LOG_FEATURE_14 LOG_FEATURE_15 LOG_FEATURE_16 LOG_FEATURE_17 LOG_FEATURE_18 LOG_FEATURE_19 LOG_FEATURE_20;*/
+/*	DO OVER ZERO;*/
+/*		IF ZERO=. THEN ZERO=0;*/
+/*	END;*/
+/*RUN;*/
+/**/
+/*DATA NEW_TRAIN;*/
+/*	SET NEW_TRAIN;*/
+/*	ARRAY ZERO LOCATION SEVERITY_TYPE RESOURCE_TYPE_1 RESOURCE_TYPE_2 RESOURCE_TYPE_3 RESOURCE_TYPE_4 RESOURCE_TYPE_5 EVENT_TYPE_1 EVENT_TYPE_2 EVENT_TYPE_3 EVENT_TYPE_4 EVENT_TYPE_5 EVENT_TYPE_6 EVENT_TYPE_7 EVENT_TYPE_8 EVENT_TYPE_9 EVENT_TYPE_10 EVENT_TYPE_11 LOG_FEATURE_1 LOG_FEATURE_2  LOG_FEATURE_3 LOG_FEATURE_4 LOG_FEATURE_5 LOG_FEATURE_6 LOG_FEATURE_7 LOG_FEATURE_8 LOG_FEATURE_9 LOG_FEATURE_10 LOG_FEATURE_11 LOG_FEATURE_12 LOG_FEATURE_13 LOG_FEATURE_14 LOG_FEATURE_15 LOG_FEATURE_16 LOG_FEATURE_17 LOG_FEATURE_18 LOG_FEATURE_19 LOG_FEATURE_20;*/
+/*	DO OVER ZERO;*/
+/*		IF ZERO=. THEN ZERO=0;*/
+/*	END;*/
+/*RUN;*/
 
 *Limiting the zero fault severity to half the sample;
 PROC SQL NOPRINT;
@@ -497,23 +577,24 @@ create table save.new_test as select * from new_test;
 quit;
 
 *Export to CSV;
-PROC EXPORT
-	DATA = NEW_TEST
-	OUTFILE = "&file_locn.new_test.csv"
-	DBMS = CSV
-	REPLACE;
-RUN;
-
-PROC EXPORT
-	DATA = NEW_TRAIN
-	OUTFILE = "&file_locn.new_train.csv"
-	DBMS = CSV
-	REPLACE;
-RUN;
-
-PROC EXPORT
-	DATA = NEW_TRAIN_SAMPLE
-	OUTFILE = "&file_locn.new_train_sample.csv"
-	DBMS = CSV
-	REPLACE;
-RUN;
+/*PROC EXPORT*/
+/*	DATA = NEW_TEST*/
+/*	OUTFILE = "&file_locn.new_test.csv"*/
+/*	DBMS = CSV*/
+/*	REPLACE;*/
+/*RUN;*/
+/**/
+/*PROC EXPORT*/
+/*	DATA = NEW_TRAIN*/
+/*	OUTFILE = "&file_locn.new_train.csv"*/
+/*	DBMS = CSV*/
+/*	REPLACE;*/
+/*RUN;*/
+/**/
+/*PROC EXPORT*/
+/*	DATA = NEW_TRAIN_SAMPLE*/
+/*	OUTFILE = "&file_locn.new_train_sample.csv"*/
+/*	DBMS = CSV*/
+/*	REPLACE;*/
+/*RUN;*/
+/**/
